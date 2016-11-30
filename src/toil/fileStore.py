@@ -154,7 +154,11 @@ class FileStore(object):
                   2) the ID of the resulting file in the job store.
         """
         # TODO: Make this work with FileID
-        return self.jobStore.writeFileStream(None if not cleanup else self.jobGraph.jobStoreID)
+        jobStoreID = None if not cleanup else self.jobGraph.jobStoreID
+        fH, jobStoreFileID = self.jobStore.writeFileStream(jobStoreID)
+        self.jobGraph.pendingFiles.append(jobStoreFileID)
+        self.jobStore.update(self.jobGraph)
+        return fH, jobStoreFileID
 
     @abstractmethod
     def readGlobalFile(self, fileStoreID, userPath=None, cache=True, mutable=None):
@@ -504,6 +508,8 @@ class CachingFileStore(FileStore):
             # the same device as the work dir.
             if self.nlinkThreshold == 2 and absLocalFileName not in jobSpecificFiles:
                 jobStoreFileID = self.jobStore.getEmptyFileStoreID(cleanupID)
+                self.jobGraph.pendingFiles.append(jobStoreFileID)
+                self.jobStore.update(self.jobGraph)
                 # getEmptyFileStoreID creates the file in the scope of the job store hence we
                 # need to delete it before linking.
                 os.remove(self.jobStore._getAbsPath(jobStoreFileID))
@@ -513,6 +519,8 @@ class CachingFileStore(FileStore):
             # Check if the user allows asynchronous file writes
             elif self.jobStore.config.useAsync:
                 jobStoreFileID = self.jobStore.getEmptyFileStoreID(cleanupID)
+                self.jobGraph.pendingFiles.append(jobStoreFileID)
+                self.jobStore.update(self.jobGraph)
                 # Before we can start the async process, we should also create a dummy harbinger
                 # file in the cache such that any subsequent jobs asking for this file will not
                 # attempt to download it from the job store till the write is complete.  We do
@@ -532,6 +540,8 @@ class CachingFileStore(FileStore):
             # Else write directly to the job store.
             else:
                 jobStoreFileID = self.jobStore.writeFile(absLocalFileName, cleanupID)
+                self.jobGraph.pendingFiles.append(jobStoreFileID)
+                self.jobStore.update(self.jobGraph)
             # Local files are cached by default, unless they were written from previously read
             # files.
             if absLocalFileName not in jobSpecificFiles:
@@ -542,6 +552,8 @@ class CachingFileStore(FileStore):
         # Else write directly to the job store.
         else:
             jobStoreFileID = self.jobStore.writeFile(absLocalFileName, cleanupID)
+            self.jobGraph.pendingFiles.append(jobStoreFileID)
+            self.jobStore.update(self.jobGraph)
             # Non local files are NOT cached by default, but they are tracked as local files.
             self._JobState.updateJobSpecificFiles(self, jobStoreFileID, None,
                                                   0.0, False)
@@ -1591,9 +1603,11 @@ class NonCachingFileStore(FileStore):
     def writeGlobalFile(self, localFileName, cleanup=False):
         absLocalFileName = self._resolveAbsoluteLocalPath(localFileName)
         cleanupID = None if not cleanup else self.jobGraph.jobStoreID
-        fileStoreID = self.jobStore.writeFile(absLocalFileName, cleanupID)
-        self.localFileMap[fileStoreID].append(absLocalFileName)
-        return FileID.forPath(fileStoreID, absLocalFileName)
+        jobStoreFileID = self.jobStore.writeFile(absLocalFileName, cleanupID)
+        self.jobGraph.pendingFiles.append(jobStoreFileID)
+        self.jobStore.update(self.jobGraph)
+        self.localFileMap[jobStoreFileID].append(absLocalFileName)
+        return FileID.forPath(jobStoreFileID, absLocalFileName)
 
     def readGlobalFile(self, fileStoreID, userPath=None, cache=True, mutable=None):
         if userPath is not None:
