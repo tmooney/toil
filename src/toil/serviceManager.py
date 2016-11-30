@@ -25,10 +25,15 @@ class ServiceManager( object ):
     """
     Manages the scheduling of services.
     """
-    def __init__(self, jobStore, toilState):
+    def __init__(self, jobStore, toilState, config):
         self.jobStore = jobStore
         
         self.toilState = toilState
+
+        self._serviceJobsRunning = 0
+        self._preemptableServiceJobsRunning = 0
+        self.maxServiceJobs = config.maxServiceJobs
+        self.maxPreemptableServiceJobs = config.maxPreemptableServiceJobs
 
         self.jobGraphsWithServicesBeingStarted = set()
 
@@ -44,6 +49,8 @@ class ServiceManager( object ):
         self._serviceJobGraphsToStart = Queue() # This is the queue of services for the
         # batch system to start
 
+        self._preemptableJobsToStart = Queue()
+
         self.jobsIssuedToServiceManager = 0 # The number of jobs the service manager
         # is scheduling
 
@@ -55,14 +62,20 @@ class ServiceManager( object ):
                                            self._jobGraphsWithServicesThatHaveStarted,
                                            self._serviceJobGraphsToStart, self._terminate,
                                            self.jobStore))
-        
+
+    def getJobToStart(self, preemptable, timeout=None):
+        if preemptable:
+            return self._preemptableJobsToStart.get(timeout=timeout)
+        else:
+            return self._serviceJobGraphsToStart.get(timeout=timeout)
+
     def start(self): 
         """
         Start the service scheduling thread.
         """
         self._serviceStarter.start()
 
-    def scheduleServices(self, jobGraph):
+    def scheduleServicesForJob(self, jobGraph):
         """
         Schedule the services of a job asynchronously.
         When the job's services are running the jobGraph for the job will
@@ -78,6 +91,13 @@ class ServiceManager( object ):
 
         # Asynchronously schedule the services
         self._jobGraphsWithServicesToStart.put(jobGraph)
+
+    def scheduleService(self, service):
+        # if we take just a service do we need to track this in the
+        # service job graphs to start state?
+        self.jobsIssuedToServiceManager += 1
+        self._serviceJobGraphsToStart.put(service)
+
 
     def getJobGraphWhoseServicesAreRunning(self, maxWait):
         """
@@ -102,13 +122,38 @@ class ServiceManager( object ):
         a service job to start.
         :rtype: toil.job.ServiceJobNode
         """
-        try:
-            serviceJob = self._serviceJobGraphsToStart.get(timeout=maxWait)
+        listToStart = []
+        canRun = lambda: self._serviceJobsRunning < self.maxServiceJobs
+        canRunPreemptable  = lambda: self._preemptableServiceJobsRunning < self.maxPreemptableServiceJobs
+        while canRun or canRunPreemptable:
+            try:
+                serviceJob = self._serviceJobGraphsToStart.get(timeout=maxWait)
+            except Empty:
+                break
             assert self.jobsIssuedToServiceManager >= 0
             self.jobsIssuedToServiceManager -= 1
-            return serviceJob
-        except Empty:
-            return None
+            if serviceJob.preemptable:
+                if canRunPreemptable:
+                    self._preemptableServiceJobsRunning += 1
+                else:
+                    self._serviceJobGraphsToStart.put()
+            else:
+                self._serviceJobsRunning += 1
+            listToStart.append(serviceJob)
+        return listToStart
+
+    @property
+    def numberRunningServices(self):
+        return self._serviceJobsRunning + self._preemptableServiceJobsRunning
+
+    @property
+    def preemptableServices(self):
+        return self._preemptableServiceJobsRunning
+
+    @property
+    def nonpreemptableServices(self):
+        return self._serviceJobsRunning
+
 
     def killServices(self, services, error=False):
         """

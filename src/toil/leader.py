@@ -109,14 +109,6 @@ class Leader:
         # Number of preempetable jobs currently being run by batch system
         self.preemptableJobsIssued = 0
         
-        # Tracking the number service jobs issued,
-        # this is used limit the number of services issued to the batch system
-        self.serviceJobsIssued = 0
-        self.serviceJobsToBeIssued = [] # A queue of service jobs that await scheduling
-        #Equivalents for service jobs to be run on preemptable nodes
-        self.preemptableServiceJobsIssued = 0
-        self.preemptableServiceJobsToBeIssued = []
-        
         # Hash to store number of times a job is lost by the batch system,
         # used to decide if to reissue an apparently missing job
         self.reissueMissingJobs_missingHash = {} 
@@ -129,7 +121,7 @@ class Leader:
         self.clusterScaler = None if self.provisioner is None else ClusterScaler(self.provisioner, self, self.config)
         
         # A service manager thread to start and terminate services
-        self.serviceManager = ServiceManager(jobStore, self.toilState)
+        self.serviceManager = ServiceManager(jobStore, self.toilState, config)
         
         # A thread to manage the aggregation of statistics and logging from the run
         self.statsAndLogging = StatsAndLogging(self.jobStore)
@@ -137,7 +129,7 @@ class Leader:
         # Set used to monitor deadlocked jobs
         self.potentialDeadlockedJobs = None
         self.potentialDeadlockTime = 0
-           
+
     def run(self):
         """
         This runs the leader process to issue and manage jobs.
@@ -290,7 +282,7 @@ class Leader:
                                 self.toilState.servicesIssued[jobGraph.jobStoreID][serviceID] = serviceTuple
     
                         # Use the service manager to start the services
-                        self.serviceManager.scheduleServices(jobGraph)
+                        self.serviceManager.scheduleServicesForJob(jobGraph)
     
                         logger.debug("Giving job: %s to service manager to schedule its jobs", jobGraph.jobStoreID)
     
@@ -388,15 +380,13 @@ class Leader:
                             self.processTotallyFailedJob(jobGraph)
                             logger.warn("Job: %s is empty but completely failed - something is very wrong", jobGraph.jobStoreID)
     
-            # Start any service jobs available from the service manager
-            self.issueQueingServiceJobs()
             while True:
-                serviceJob = self.serviceManager.getServiceJobsToStart(0)
+                serviceJobs = self.serviceManager.getServiceJobsToStart(0)
                 # Stop trying to get jobs when function returns None
-                if serviceJob is None:
+                if serviceJobs is None:
                     break
-                logger.debug('Launching service job: %s', serviceJob)
-                self.issueServiceJob(serviceJob)
+                logger.debug('Launching service jobs: %s', ' '.join(serviceJobs))
+                self.issueJobs(serviceJobs)
     
             # Get jobs whose services have started
             while True:
@@ -483,8 +473,8 @@ class Leader:
         if len(self.toilState.updatedJobs) == 0 and self.getNumberOfJobsIssued() > 0:
             
             # If all scheduled jobs are services 
-            assert self.serviceJobsIssued + self.preemptableServiceJobsIssued <= self.getNumberOfJobsIssued()
-            if self.serviceJobsIssued + self.preemptableServiceJobsIssued == self.getNumberOfJobsIssued():
+            assert self.serviceManager.numberRunningServices <= self.getNumberOfJobsIssued()
+            if self.serviceManager.numberRunningServices == self.getNumberOfJobsIssued():
                 
                 # Sanity check that all issued jobs are actually services
                 for jobNode in self.jobBatchSystemIDToIssuedJob.values():
@@ -524,28 +514,6 @@ class Leader:
         """
         for job in jobs:
             self.issueJob(job)
-            
-    def issueServiceJob(self, jobNode):
-        """
-        Issue a service job, putting it on a queue if the maximum number of service
-        jobs to be scheduled has been reached.
-        """
-        if jobNode.preemptable:
-            self.preemptableServiceJobsToBeIssued.append(jobNode)
-        else:
-            self.serviceJobsToBeIssued.append(jobNode)
-        self.issueQueingServiceJobs()
-    
-    def issueQueingServiceJobs(self):
-        """
-        Issues any queuing service jobs up to the limit of the maximum allowed.
-        """
-        while len(self.serviceJobsToBeIssued) > 0 and self.serviceJobsIssued < self.config.maxServiceJobs:
-            self.issueJob(self.serviceJobsToBeIssued.pop())
-            self.serviceJobsIssued += 1      
-        while len(self.preemptableServiceJobsToBeIssued) > 0 and self.preemptableServiceJobsIssued < self.config.maxPreemptableServiceJobs:
-            self.issueJob(self.preemptableServiceJobsToBeIssued.pop())
-            self.preemptableServiceJobsIssued += 1   
 
     def getNumberOfJobsIssued(self, preemptable=None):
         """
@@ -556,7 +524,7 @@ class Leader:
           If true, return just the number of preemptable jobs. If false, return
           just the number of non-preemptable jobs.
         """
-        #assert self.jobsIssued >= 0 and self._preemptableJobsIssued >= 0
+        #assert self.jobsIssued >= 0 and self.preemptableJobsIssued >= 0
         if preemptable is None:
             return len(self.jobBatchSystemIDToIssuedJob)
         elif preemptable:
@@ -589,15 +557,6 @@ class Leader:
         if jobNode.preemptable:
             assert self.preemptableJobsIssued > 0
             self.preemptableJobsIssued -= 1
-            
-        # If service job
-        if jobNode.jobStoreID in self.toilState.serviceJobStoreIDToPredecessorJob:
-            # Decrement the number of services
-            if jobNode.preemptable:
-                self.preemptableServiceJobsIssued -= 1
-            else:
-                self.serviceJobsIssued -= 1
-        
         return jobNode
 
     def getJobIDs(self):
