@@ -50,8 +50,9 @@ class JobGraphTest(ToilTest):
         jobStoreID = 100
         remainingRetryCount = 5
         predecessorNumber = 0
-        
-        j = JobGraph(command=command, memory=memory, cores=cores, disk=disk, preemptable=preemptable,
+
+        reqs = dict(memory=memory, cores=cores, disk=disk, preemptable=preemptable)
+        j = JobGraph(command=command, requirements=reqs,
                      jobStoreID=jobStoreID, remainingRetryCount=remainingRetryCount,
                      predecessorNumber=predecessorNumber, jobName='testJobGraph', unitName='noName')
         
@@ -70,8 +71,7 @@ class JobGraphTest(ToilTest):
         self.assertEquals(j.logJobStoreFileID, None)
         
         #Check equals function
-        j2 = JobGraph(command=command, memory=memory, cores=cores, disk=disk,
-                      preemptable=preemptable,
+        j2 = JobGraph(command=command, requirements=reqs,
                       jobStoreID=jobStoreID, remainingRetryCount=remainingRetryCount,
                       predecessorNumber=predecessorNumber, jobName='testJobGraph', unitName='noName')
         self.assertEquals(j, j2)

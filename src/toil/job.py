@@ -50,80 +50,92 @@ class JobLikeObject(object):
     If the object doesn't specify explicit requirements, these properties will fall back
     to the configured defaults. If the value cannot be determined, an AttributeError is raised.
     """
-    def __init__(self, requirements, unitName, jobName=None):
-        cores = requirements.get('cores')
-        memory = requirements.get('memory')
-        disk = requirements.get('disk')
-        preemptable = requirements.get('preemptable')
+    def __init__(self, unitName, jobName=None, requirements=None):
+        self.reqNames = ['memory', 'cores', 'disk', 'preemptable']
+        self.requirements = requirements if requirements is not None else self.populateRequirements()
         if unitName is not None:
             assert isinstance(unitName, str)
         if jobName is not None:
             assert isinstance(jobName, str)
         self.unitName = unitName
         self.jobName = jobName if jobName is not None else self.__class__.__name__
-        self._cores = self._parseResource('cores', cores)
-        self._memory = self._parseResource('memory', memory)
-        self._disk = self._parseResource('disk', disk)
-        self._preemptable = preemptable
-        self._config = None
 
-    @property
-    def disk(self):
-        """
-        The maximum number of bytes of disk the job will require to run.
-        """
-        if self._disk is not None:
-            return self._disk
-        elif self._config is not None:
-            return self._config.defaultDisk
-        else:
-            raise AttributeError("Default value for 'disk' cannot be determined")
+    def _generateRequirements(self):
+        for reqName in self.reqNames:
+            def generalGeter(self):
+                generatedName = inspect.getframeinfo(inspect.currentframe())[2]
+                value = self.requirements[generatedName]
+                assert value is not None
+                return value
+            generalGeter.__name__ = reqName
+            generalGeter.__doc__ = "dynamically generated getter for resource requirements"
+            setattr(self, generalGeter.__name__, generalGeter)
 
-    @property
-    def memory(self):
-        """
-        The maximum number of bytes of memory the job will require to run.
-        """
-        if self._memory is not None:
-            return self._memory
-        elif self._config is not None:
-            return self._config.defaultMemory
-        else:
-            raise AttributeError("Default value for 'memory' cannot be determined")
+    def _setDefaults(self, config):
+        for reqName in self.reqNames:
+            if self.requirements[reqName] is None:
+                # user has not set an explicit value
+                defaultName = 'default' + reqName.title()
+                defaultValue = getattr(config, defaultName, None)
+                if defaultValue is not None:
+                    self.requirements[reqName] = defaultValue
+                else:
+                    raise AttributeError("Default value for '%s' cannot be determined" % reqName)
+        self._generateRequirements()
 
-    @property
-    def cores(self):
-        """
-        The number of CPU cores required.
-        """
-        if self._cores is not None:
-            return self._cores
-        elif self._config is not None:
-            return self._config.defaultCores
-        else:
-            raise AttributeError("Default value for 'cores' cannot be determined")
+    def _hasRequirementValues(self, kwargs):
+        for reqName in self.reqNames:
+            if reqName in kwargs:
+                return True
+        return False
 
-    @property
-    def preemptable(self):
-        """
-        Whether the job can be run on a preemptable node.
-        """
-        if self._preemptable is not None:
-            return self._preemptable
-        elif self._config is not None:
-            return self._config.defaultPreemptable
-        else:
-            raise AttributeError("Default value for 'preemptable' cannot be determined")
+    def populateRequirements(self):
+        stackFrame = inspect.stack()
+        # skip the current frame & the frame above since we know no resource requirements
+        # were passed into this method or into the JobLikeObject constructor
+        for frame, _, _, _, _, _ in stackFrame[2:]:
+            _, _, _, kwargs = inspect.getargvalues(frame)
+            if self._hasRequirementValues(kwargs):
+                requirements = dict()
+                for reqName in self.reqNames:
+                    requirements[reqName] = self._parseResource(reqName, kwargs.pop(reqName, None))
+                return requirements
 
-    @property
-    def _requirements(self):
-        """
-        Gets a dictionary of all the object's resource requirements. Unset values are defaulted to None
-        """
-        return {'memory': getattr(self, 'memory', None),
-                'cores': getattr(self, 'cores', None),
-                'disk': getattr(self, 'disk', None),
-                'preemptable': getattr(self, 'preemptable', None)}
+    # @property
+    # def disk(self):
+    #     """
+    #     The maximum number of bytes of disk the job will require to run.
+    #     """
+    #     disk = self.requirements['disk']
+    #     assert disk is not None
+    #     return disk
+    #
+    # @property
+    # def memory(self):
+    #     """
+    #     The maximum number of bytes of memory the job will require to run.
+    #     """
+    #     memory = self.requirements['memory']
+    #     assert memory is not None
+    #     return memory
+    #
+    # @property
+    # def cores(self):
+    #     """
+    #     The number of CPU cores required.
+    #     """
+    #     cores = self.requirements['cores']
+    #     assert cores is not None
+    #     return cores
+    #
+    # @property
+    # def preemptable(self):
+    #     """
+    #     Whether the job can be run on a preemptable node.
+    #     """
+    #     preemptable = self.requirements['preemptable']
+    #     assert preemptable is not None
+    #     return preemptable
 
     @staticmethod
     def _parseResource(name, value):
@@ -156,7 +168,7 @@ class JobLikeObject(object):
         ...
         TypeError: The 'memory' requirement does not accept values that are of <type 'object'>
         """
-        assert name in ('memory', 'disk', 'cores')
+        assert name in ('memory', 'disk', 'cores', 'preemptable')
         if value is None:
             return value
         elif isinstance(value, str):
@@ -164,6 +176,8 @@ class JobLikeObject(object):
         if isinstance(value, int):
             return value
         elif isinstance(value, float) and name == 'cores':
+            return value
+        elif isinstance(value, bool) and name == 'preemptable':
             return value
         else:
             raise TypeError("The '%s' requirement does not accept values that are of %s"
@@ -182,9 +196,9 @@ class JobNode(JobLikeObject):
     """
     This object bridges the job graph, job, and batchsystem classes
     """
-    def __init__(self, requirements, jobName, unitName, jobStoreID,
-                 command, predecessorNumber=1):
-        super(JobNode, self).__init__(requirements=requirements, unitName=unitName, jobName=jobName)
+    def __init__(self, jobName, unitName, jobStoreID,
+                 command, predecessorNumber=1, requirements=None):
+        super(JobNode, self).__init__(unitName=unitName, jobName=jobName, requirements=requirements)
         self.jobStoreID = jobStoreID
         self.predecessorNumber = predecessorNumber
         self.command = command
@@ -217,7 +231,7 @@ class JobNode(JobLikeObject):
         :rtype: toil.job.JobNode
         """
         return cls(jobStoreID=jobGraph.jobStoreID,
-                   requirements=jobGraph._requirements,
+                   requirements=jobGraph.requirements,
                    command=jobGraph.command,
                    jobName=jobGraph.jobName,
                    unitName=jobGraph.unitName,
@@ -235,7 +249,7 @@ class JobNode(JobLikeObject):
         :rtype: toil.job.JobNode
         """
         return cls(jobStoreID=None,
-                   requirements=job._requirements,
+                   requirements=job.requirements,
                    command=command,
                    jobName=job.jobName,
                    unitName=job.unitName,
@@ -265,9 +279,7 @@ class Job(JobLikeObject):
         :type cache: int or string convertable by bd2k.util.humanize.human2bytes to an int
         :type memory: int or string convertable by bd2k.util.humanize.human2bytes to an int
         """
-        requirements = {'memory': memory, 'cores': cores, 'disk': disk,
-                        'preemptable': preemptable}
-        super(Job, self).__init__(requirements=requirements, unitName=unitName)
+        super(Job, self).__init__(unitName=unitName)
         self.checkpoint = checkpoint
         #Private class variables
 
@@ -749,9 +761,7 @@ class Job(JobLikeObject):
             Memory, core and disk requirements are specified identically to as in \
             :func:`toil.job.Job.__init__`.
             """
-            requirements = {'memory': memory, 'cores': cores, 'disk': disk,
-                            'preemptable': preemptable}
-            super(Job.Service, self).__init__(requirements=requirements, unitName=unitName)
+            super(Job.Service, self).__init__(unitName=unitName)
             self._childServices = []
             self._hasParent = False
 
@@ -884,7 +894,7 @@ class Job(JobLikeObject):
         unpickler.find_global = filter_main
         runnable = unpickler.load()
         assert isinstance(runnable, JobLikeObject)
-        runnable._config = config
+        runnable._setDefaults(config)
         return runnable
 
     def getUserScript(self):
@@ -979,8 +989,7 @@ class Job(JobLikeObject):
         """
         Create an empty job for the job.
         """
-        # set _config to determine user determined default values for resource requirements
-        self._config = jobStore.config
+        self._setDefaults(jobStore.config)
         return jobStore.create(JobNode.fromJob(self, command=command,
                                                predecessorNumber=predecessorNumber))
 
@@ -1087,8 +1096,8 @@ class Job(JobLikeObject):
 
             # Create the service job tuple
             j = ServiceJobNode(jobStoreID=serviceJobGraph.jobStoreID,
-                               memory=serviceJobGraph.memory, cores=serviceJobGraph.cores,
-                               disk=serviceJobGraph.disk, startJobStoreID=serviceJobGraph.startJobStoreID,
+                               requirements=serviceJobGraph.requirements,
+                               startJobStoreID=serviceJobGraph.startJobStoreID,
                                terminateJobStoreID=serviceJobGraph.terminateJobStoreID,
                                errorJobStoreID=serviceJobGraph.errorJobStoreID,
                                jobName=serviceJobGraph.jobName, unitName=serviceJobGraph.unitName,
@@ -1456,7 +1465,7 @@ class EncapsulatedJob(Job):
         :param toil.job.Job job: the job to encapsulate.
         """
         # Giving the root of the subgraph the same resources as the first job in the subgraph.
-        Job.__init__(self, **job._requirements)
+        Job.__init__(self, **job.requirements)
         self.encapsulatedJob = job
         Job.addChild(self, job)
         # Use small resource requirements for dummy Job instance.
@@ -1484,9 +1493,9 @@ class EncapsulatedJob(Job):
 
 
 class ServiceJobNode(JobNode):
-    def __init__(self, jobStoreID, memory, cores, disk, startJobStoreID, terminateJobStoreID,
-                 errorJobStoreID, unitName, jobName, command, predecessorNumber):
-        requirements = dict(memory=memory, cores=cores, disk=disk, preemptable=False)
+    def __init__(self, jobStoreID, startJobStoreID, terminateJobStoreID,
+                 errorJobStoreID, unitName, jobName, command, predecessorNumber,
+                 requirements=None):
         super(ServiceJobNode, self).__init__(unitName=unitName, jobName=jobName,
                                              requirements=requirements,
                                              jobStoreID=jobStoreID,
@@ -1508,7 +1517,7 @@ class ServiceJob(Job):
         :param service: The service to wrap in a job.
         :type service: toil.job.Job.Service
         """
-        Job.__init__(self, **service._requirements)
+        Job.__init__(self, **service.requirements)
         # service.__module__ is the module defining the class service is an instance of.
         self.serviceModule = ModuleDescriptor.forModule(service.__module__).globalize()
 

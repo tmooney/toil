@@ -26,7 +26,7 @@ class JobGraph(JobNode):
     scripts is persisted separately since it may be much bigger than the state managed by this
     class and should therefore only be held in memory for brief periods of time.
     """
-    def __init__(self, command, memory, cores, disk, unitName, jobName, preemptable,
+    def __init__(self, command, requirements, unitName, jobName,
                  jobStoreID, remainingRetryCount, predecessorNumber,
                  filesToDelete=None, predecessorsFinished=None,
                  stack=None, services=None,
@@ -35,10 +35,7 @@ class JobGraph(JobNode):
                  logJobStoreFileID=None,
                  checkpoint=None,
                  checkpointFilesToDelete=None):
-        requirements = {'memory': memory, 'cores': cores, 'disk': disk,
-                        'preemptable': preemptable}
-        super(JobGraph, self).__init__(command=command,
-                                       requirements=requirements,
+        super(JobGraph, self).__init__(command=command, requirements=requirements,
                                        unitName=unitName, jobName=jobName,
                                        jobStoreID=jobStoreID,
                                        predecessorNumber=predecessorNumber)
@@ -129,7 +126,7 @@ class JobGraph(JobNode):
                    remainingRetryCount=tryCount,
                    predecessorNumber=jobNode.predecessorNumber,
                    unitName=jobNode.unitName, jobName=jobNode.jobName,
-                   **jobNode._requirements)
+                   requirements=jobNode.requirements)
 
     def __eq__(self, other):
         return (
