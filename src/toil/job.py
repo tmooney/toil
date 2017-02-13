@@ -446,6 +446,18 @@ class Job(JobLikeObject):
         else:
             return self.addFollowOn(JobFunctionWrappingJob(fn, *args, **kwargs))
 
+    @property
+    def tempDir(self):
+        """
+        Convenience wrapper for :func:`toil.fileStore.FileStore.getLocalTempDir`
+
+        :return: The absolute path to a new local temporary directory. This directory will exist
+                 for the duration of the job only, and is guaranteed to be deleted once the job
+                 terminates, removing all files it contains recursively.
+        :rtype: str
+        """
+        return self.fileStore.getLocalTempDir()
+
     @staticmethod
     def wrapFn(fn, *args, **kwargs):
         """
