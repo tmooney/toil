@@ -924,7 +924,7 @@ class hidden:
             :param str maxWriteFile: path to file where the max number of concurrent readers of
                                      cache lock file will be written
             """
-            work_dir = job.fileStore.getLocalTempDir()
+            work_dir = job.tempDir
             outfile = job.fileStore.readGlobalFile(fsID, '/'.join([work_dir, 'temp']), cache=True,
                                                    mutable=False)
             diskMB = diskMB * 1024 * 1024
@@ -950,10 +950,10 @@ class hidden:
 
         @staticmethod
         def _writeExportGlobalFile(job):
-            fileName = os.path.join(job.fileStore.getLocalTempDir(), 'testfile')
+            fileName = os.path.join(job.tempDir, 'testfile')
             with open(fileName, 'wb') as f:
                 f.write(os.urandom(1024 * 30000)) # 30 Mb
-            outputFile = os.path.join(job.fileStore.getLocalTempDir(), 'exportedFile')
+            outputFile = os.path.join(job.tempDir, 'exportedFile')
             job.fileStore.exportFile(job.fileStore.writeGlobalFile(fileName), 'File://' + outputFile)
             assert filecmp.cmp(fileName, outputFile)
 
@@ -1006,7 +1006,7 @@ class hidden:
             :param float jobDisk: The value of disk passed to this job.
             """
             cached = initialCachedSize
-            work_dir = job.fileStore.getLocalTempDir()
+            work_dir = job.tempDir
             writtenFiles = {}  # fsID: (size, isLocal)
             localFileIDs = collections.defaultdict(list)  # fsid: local/non-local/mutable/immutable
             # Add one file for the sake of having something in the job store
