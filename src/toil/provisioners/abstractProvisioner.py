@@ -37,6 +37,14 @@ node) in RAM or on disk (SSD or HDD), respectively.
 """
 
 
+def smallestNodeShapeForJob(jobShape, nodeShapes):
+    for nodeShape in nodeShapes:
+        if jobShape.memory <= nodeShape.memory and jobShape.cores <= nodeShape.cores and jobShape.disk <= nodeShape.disk:
+            return nodeShape
+    import pdb
+    pdb.set_trace()
+    assert False
+
 class AbstractProvisioner(object):
     """
     An abstract base class to represent the interface for provisioning worker nodes to use in a
@@ -88,7 +96,7 @@ class AbstractProvisioner(object):
             self.static[preemptable] = {node.privateIP : node for node in nodes}
 
     @abstractmethod
-    def addNodes(self, numNodes, preemptable):
+    def addNodes(self, nodeType, numNodes, preemptable):
         """
         Used to add worker nodes to the cluster
 
@@ -108,7 +116,7 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def getProvisionedWorkers(self, preemptable):
+    def getProvisionedWorkers(self, nodeType, preemptable):
         """
         Gets all nodes of the given preemptability from the provisioner.
         Includes both static and autoscaled nodes.
@@ -131,14 +139,13 @@ class AbstractProvisioner(object):
         raise NotImplementedError
 
     @abstractmethod
-    def getNodeShape(self, preemptable=False):
+    def getNodeShape(self, nodeType=None):
         """
         The shape of a preemptable or non-preemptable node managed by this provisioner. The node
         shape defines key properties of a machine, such as its number of cores or the time
         between billing intervals.
 
-        :param preemptable: Whether to return the shape of preemptable nodes or that of
-               non-preemptable ones.
+        :param str nodeType: Node type name to return the shape of.
 
         :rtype: Shape
         """
