@@ -16,10 +16,10 @@ from abc import ABCMeta, abstractmethod
 
 from collections import namedtuple
 
+import os
 
-
-from bd2k.util.retry import never
-
+from bd2k.util.retry import retry, never
+from toil.lib.bioio import getTempFile
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +129,55 @@ class AbstractProvisioner(object):
         :return: float from 0 -> 1.0 representing percentage of pre-paid time left in cycle
         """
         raise NotImplementedError
+
+    @classmethod
+    def startMonitoring(cls, clusterName, args):
+        from toil.provisioners.aws import prometheusConfig, toilDashboardConfig, mtailConfig
+        prometheusConfigFile = getTempFile(rootDir=os.getcwd())
+        toilDashboardConfigFile = getTempFile(rootDir=os.getcwd())
+        mtailConfigFile = getTempFile(rootDir=os.getcwd())
+        with open(prometheusConfigFile, 'w') as writable:
+            writable.write(prometheusConfig.format(clusterName))
+        with open(toilDashboardConfigFile, 'w') as writable:
+            writable.write(toilDashboardConfig)
+        with open(mtailConfigFile, 'w') as writable:
+            writable.write(mtailConfig)
+        cls.rsyncLeader(clusterName, args=[prometheusConfigFile, ":/home/core/prometheus.yml"])
+        cls.rsyncLeader(clusterName, args=[toilDashboardConfigFile, ":/home/core/toil.json"])
+        cls.rsyncLeader(clusterName, args=[mtailConfigFile, ":/home/core/toil.mtail"])
+        os.remove(prometheusConfigFile)
+        os.remove(toilDashboardConfigFile)
+        os.remove(mtailConfigFile)
+        try:
+            cls.sshLeader(clusterName=clusterName, args=["docker", "rm" , "-f", "-v", "prometheus_server"], appliance=False)
+            cls.sshLeader(clusterName=clusterName, args=["docker", "rm", "-f", "-v", "grafana_server"], appliance=False)
+        except RuntimeError:
+            pass
+        cls.sshLeader(clusterName=clusterName, args=["docker", "run", "--name", "prometheus_server", "-d", "-p=9090:9090", "-v=/home/core/prometheus.yml:/etc/prometheus/prometheus.yml", "prom/prometheus"], appliance=False)
+        cls.sshLeader(clusterName=clusterName, args=["docker", "run",
+                                                     "--name", "grafana_server",
+                                                     "-v=/home/core/toil.json:/usr/share/grafana/public/dashboards/home.json",
+                                                     "-d", "-p=3000:3000",
+                                                     "-e", "GF_AUTH_ANONYMOUS_ENABLED=true",
+                                                     "grafana/grafana"], appliance=False)
+
+        def requestPredicate(e):
+            if isinstance(e, RuntimeError):
+                return True
+            return False
+
+        #Add prometheus data source
+        for attempt in retry(predicate=requestPredicate):
+            with attempt:
+                cls.sshLeader(clusterName=clusterName, args=['curl', '-i', '--user', 'admin:admin', '-H',
+                                                     'Content-Type: application/json',
+                                                     '-X', 'POST',
+                                                     '-d', '{"name":"DS_PROMETHEUS",\
+                                                     "type":"prometheus",\
+                                                     "url":"http://localhost:9090",\
+                                                     "access":"direct"}',
+                                                     'http://localhost:3000/api/datasources'])
+
 
     @abstractmethod
     def getNodeShape(self, preemptable=False):

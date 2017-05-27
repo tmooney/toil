@@ -213,12 +213,16 @@ class AWSProvisioner(AbstractProvisioner):
                            'roles will not be deleted.')
 
     @classmethod
-    def sshLeader(cls, clusterName, args=None, zone=None, **kwargs):
+    def sshLeader(cls, clusterName, args=None, zone=None, appliance=True, **kwargs):
         leader = cls._getLeader(clusterName, zone=zone)
         logger.info('SSH ready')
         kwargs['tty'] = sys.stdin.isatty()
         command = args if args else ['bash']
-        cls._sshAppliance(leader.public_dns_name, *command, **kwargs)
+        if appliance:
+            cls._sshAppliance(leader.public_dns_name, *command, **kwargs)
+        else:
+            del kwargs['tty']
+            cls._coreSSH(leader.public_dns_name, *command, **kwargs)
 
     @classmethod
     def rsyncLeader(cls, clusterName, args, zone=None):
@@ -302,6 +306,7 @@ class AWSProvisioner(AbstractProvisioner):
                      name=i.id, launchTime=i.launch_time)
                 for i in workerInstances]
 
+
     def _getInstanceType(self, preemptable):
         try:
             iType = self.instanceType[preemptable]
@@ -364,7 +369,6 @@ class AWSProvisioner(AbstractProvisioner):
                     'you are running on EC2.')
         return Context(availability_zone=zone, namespace=cls._toNameSpace(clusterName))
 
-
     @classmethod
     @memoize
     def _discoverAMI(cls, ctx):
@@ -422,6 +426,7 @@ class AWSProvisioner(AbstractProvisioner):
         """
         commandTokens = ['ssh', '-o', "StrictHostKeyChecking=no", '-t']
         sshOptions = kwargs.pop('sshOptions', None)
+        commandTokens.extend(['-L', '3000:localhost:3000', '-L', '9090:localhost:9090'])
         if sshOptions:
             # add specified options to ssh command
             assert isinstance(sshOptions, list)
@@ -454,11 +459,10 @@ class AWSProvisioner(AbstractProvisioner):
         assert stderr is None
         return stdout
 
-
     @classmethod
-    def _rsyncNode(cls, ip, args, applianceName='toil_leader'):
+    def _rsyncNode(cls, ip, args, applianceName='toil_leader', appliance=False):
         sshCommand = 'ssh -o "StrictHostKeyChecking=no"'  # Skip host key checking
-        remoteRsync = "docker exec -i %s rsync" % applianceName  # Access rsync inside appliance
+        remoteRsync = "docker exec -i %s rsync" % applianceName# Access rsync inside appliance
         parsedArgs = []
         hostInserted = False
         # Insert remote host address
@@ -471,9 +475,10 @@ class AWSProvisioner(AbstractProvisioner):
             parsedArgs.append(i)
         if not hostInserted:
             raise ValueError("No remote host found in argument list")
-        command = ['rsync', '-e', sshCommand, '--rsync-path', remoteRsync]
+        command = ['rsync', '-e', sshCommand]
+        if appliance:
+            command += ['--rsync-path', remoteRsync]
         logger.debug("Running %r.", command + parsedArgs)
-
         return subprocess.check_call(command + parsedArgs)
 
     @classmethod

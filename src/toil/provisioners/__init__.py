@@ -86,6 +86,9 @@ class Cluster(object):
     def destroyCluster(self):
         self.provisioner.destroyCluster(self.clusterName, self.zone)
 
+    def monitorCluster(self, args):
+        self.provisioner.startMonitoring(self.clusterName, args)
+
 class Node(object):
 
     def __init__(self, publicIP, privateIP, name, launchTime):
