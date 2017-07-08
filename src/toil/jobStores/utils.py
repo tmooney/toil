@@ -119,13 +119,6 @@ class WritablePipe(object):
                 os.close(readable_fh)
 
 
-# FIXME: Unfortunately these two classes are almost an exact mirror image of each other.
-# Basically, read and write are swapped. The only asymmetry lies in how shutdown is handled. I
-# tried generalizing but the code becomes inscrutable. Until I (or someone else) has a better
-# idea how to solve this, I think its better to have code that is readable at the expense of
-# duplication.
-
-
 class ReadablePipe(object):
     """
     An object-oriented wrapper for os.pipe. Clients should subclass it, implement
@@ -201,25 +194,32 @@ class ReadablePipe(object):
         raise NotImplementedError()
 
     def _writer(self):
-        with os.fdopen(self.writable_fh, 'w') as writable:
-            # FIXME: another race here, causing a redundant attempt to close in the main thread
-            self.writable_fh = None  # signal to parent thread that we've taken over
-            self.writeTo(writable)
+        try:
+            self.writeTo(self.writable)
+        except ValueError as e:
+            # The file may have been closed by the reading thread,
+            # which is OK.
+            if e.message != 'I/O operation on closed file':
+                raise
 
     def __init__(self):
         super(ReadablePipe, self).__init__()
-        self.writable_fh = None
+        self.writable = None
         self.readable = None
         self.thread = None
 
     def __enter__(self):
-        readable_fh, self.writable_fh = os.pipe()
+        readable_fh, writable_fh = os.pipe()
         self.readable = os.fdopen(readable_fh, 'r')
+        self.writable = os.fdopen(writable_fh, 'w')
         self.thread = ExceptionalThread(target=self._writer)
         self.thread.start()
         return self.readable
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # Close the file. The writing thread may still be writing to
+        # it, but this will wake it up if that's the case.
+        self.writable.close()
         try:
             if exc_type is None:
                 if self.thread is not None:
@@ -227,10 +227,3 @@ class ReadablePipe(object):
                     self.thread.join()
         finally:
             self.readable.close()
-            # The responsibility for closing the writable end is generally that of the writer
-            # thread. To cover the small window before the writer takes over we also close it here.
-            writable_fh = self.writable_fh
-            if writable_fh is not None:
-                # FIXME: This is still racy. The writer thread could close it now, and someone
-                # else may immediately open a new file, reusing the file handle.
-                os.close(writable_fh)
