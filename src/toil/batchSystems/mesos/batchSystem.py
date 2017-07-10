@@ -389,8 +389,7 @@ class MesosBatchSystem(BatchSystemSupport,
 
         #Sort offers in order of increasing memory - using memory as a proxy for
         #the cost of the node
-        offerTypes = offerTypes.sorted(key=lambda x:x[1])
-        offersTypes = offerTypes[::-1]
+        offerTypes = sorted(offerTypes, key=lambda x:x[1])
 
         remainingResources = {offer:self._parseOffer(offer)[:-1] for offer in offers}
 
