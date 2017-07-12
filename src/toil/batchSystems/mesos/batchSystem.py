@@ -41,6 +41,7 @@ from toil.batchSystems.abstractBatchSystem import (AbstractScalableBatchSystem,
                                                    BatchSystemSupport,
                                                    NodeInfo)
 from toil.batchSystems.mesos import ToilJob, ResourceRequirement, TaskData, JobQueue
+from toil.provisioners.abstractProvisioner import smallestNodeShapeForJob
 
 log = logging.getLogger(__name__)
 
@@ -148,6 +149,13 @@ class MesosBatchSystem(BatchSystemSupport,
         # or if the nodes in the cluster simply don't have enough resources to run the jobs
         self.lastTimeOfferLogged = 0
         self.logPeriod = 30  # seconds
+
+        #if config.provisioner == "aws":
+        #    from toil.provisioners.awsProvisioner import AWSProvisioner
+        #    if config.nodeTypes:
+        #        self.nodeShapes = [AWSProvisioner.getNodeShape(nodeType) for nodeType in config.nodeTypes]
+        #    if config.preemptableNodeTypes:
+        #        self.preemptableNodeShapes = [AWSProvisioner.getNodeShape(nodeType) for nodeType in config.preemptableNodeTypes]
 
         self._startDriver()
 
@@ -378,35 +386,42 @@ class MesosBatchSystem(BatchSystemSupport,
             # Without jobs, we can get stuck with no jobs and no new offers until we decline it.
             self._declineAllOffers(driver, offers)
             return
-        offerTypeToOffers = {}
+        nodeShapeToOffers = {}
         for offer in offers:
-            offerType = self._parseOffer(offer)
-            if offerType in offerTypeToOffers:
-                offerTypeToOffers[offerType].append(offer)
+            offerCores, offerMemory, offerDisk, offerPreemptable = self._parseOffer(offer)
+            nodeInfo = self.executors.get(socket.gethostbyname(offer.hostname))
+            nodeShape = (nodeInfo.totalCores, nodeInfo.totalMemory, nodeInfo.totalDisk, offerPreemptable)
+            if nodeShape in nodeShapeToOffers:
+                nodeShapeToOffers[nodeShape].append(offer)
             else:
-                offerTypeToOffers[offerType] = [offer]
-        offerTypes = offerTypeToOffers.keys()
+                nodeShapeToOffers[nodeShape] = [offer]
+        nodeShapes = nodeShapeToOffers.keys()
 
-        #Sort offers in order of increasing memory - using memory as a proxy for
+        #Sort nodes in order of increasing memory - using memory as a proxy for
         #the cost of the node
-        offerTypes = sorted(offerTypes, key=lambda x:x[1])
+        nodeShapes = sorted(nodeShapes, key=lambda x:x[1])
+        log.debug("Detected node shapes: %s" % nodeShapes)
+        log.debug("Assigning jobs %s" % jobTypes)
 
-        remainingResources = {offer:self._parseOffer(offer)[:-1] for offer in offers}
+        remainingResources = {offer.id:self._parseOffer(offer) for offer in offers}
 
         unableToRun = True
-        runnableTasks = {offer:[] for offer in offers}
-        # Give priority to largest jobs, and assign jobs only to the smallest offer
+        runnableTasks = {offer.id:[] for offer in offers}
+        # Give priority to largest jobs, and assign jobs only to the smallest node shape
         # that can run them. This allows expensive nodes to "drain" so that the provisioner
         # can terminate them.
         for jobType in jobTypes:
-            for offerType in offerTypes:
-                # Toil specifies disk and memory in bytes but Mesos uses MiB
-                offerCores, offerMemory, offerDisk, offerPreemptable = offerType
-                if offerCores >= jobType.cores and offerMemory >= jobType.memory and offerDisk >= jobType.disk and (not offerPreemptable or jobType.preemptable):
-                    #This is the smallest offer that can run this jobType. Assign as many jobs
-                    # as possible of this type to the offers of this offer type
-                    for offer in offerTypeToOffers[offerType]:
-                        remainingCores, remainingMemory, remainingDisk = remainingResources[offer]
+            for nodeShape in nodeShapes:
+                nodeCores, nodeMemory, nodeDisk, nodePreemptable = nodeShape
+                if (nodeCores >= jobType.cores 
+                    and nodeMemory >= jobType.memory
+                    and nodeDisk >= jobType.disk and 
+                    and ((not nodePreemptable) or jobType.preemptable)):
+                    
+                    offersThisNodeShape = nodeShapeToOffers[nodeShape]
+                    for offer in offersThisNodeShape:
+                        remainingCores, remainingMemory, remainingDisk, offerPreemptable = remainingResources[offer.id]
+                        assert (not offerPreemptable) or jobType.preemptable
                         while ( not self.jobQueues.typeEmpty(jobType)
                                # On a non-preemptable node we can run any job, on a preemptable node we
                                # can only run preemptable jobs:
@@ -417,30 +432,23 @@ class MesosBatchSystem(BatchSystemSupport,
                             # TODO: this used to be a conditional but Hannes wanted it changed to an assert
                             # TODO: ... so we can understand why it exists.
                             assert int(task.task_id.value) not in self.runningJobMap
-                            runnableTasks[offer].append(task)
+                            runnableTasks[offer.id].append(task)
                             log.debug("Preparing to launch Mesos task %s using offer %s ...",
                                       task.task_id.value, offer.id.value)
                             remainingCores -= jobType.cores
                             remainingMemory -= toMiB(jobType.memory)
                             remainingDisk -= toMiB(jobType.disk)
-                        remainingResources[offer] = (remainingCores, remainingMemory, remainingDisk)
+                            remainingResources[offer.id] = (remainingCores, remainingMemory, remainingDisk, offerPreemptable)
+                    #Don't continue to larger node types than
+                    # can fit jobs of this type
                     break
-                else:
-                    log.debug('Offer %(offer)s not suitable to run the tasks with requirements '
-                              '%(requirements)r. Mesos offered %(memory)s memory, %(cores)s cores '
-                              'and %(disk)s of disk on a %(non)spreemptable slave.',
-                              dict(offer=offer.id.value,
-                                   requirements=jobType.__dict__,
-                                   non='' if offerPreemptable else 'non-',
-                                   memory=fromMiB(offerMemory),
-                                   cores=offerCores,
-                                   disk=fromMiB(offerDisk)))
+                        
         # Launch all runnable tasks together so we only call launchTasks once per offer
         for offer in offers:
-            if runnableTasks[offer]:
+            if runnableTasks[offer.id]:
                 unableToRun = False
-                driver.launchTasks(offer.id, runnableTasks[offer])
-                self._updateStateToRunning(offer, runnableTasks[offer])
+                driver.launchTasks(offer.id, runnableTasks[offer.id])
+                self._updateStateToRunning(offer, runnableTasks[offer.id])
             else:
                 log.debug('Although there are queued jobs, none of them could be run with offer %s '
                           'extended to the framework.', offer.id)

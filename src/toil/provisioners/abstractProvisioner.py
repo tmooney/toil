@@ -41,8 +41,6 @@ def smallestNodeShapeForJob(jobShape, nodeShapes):
     for nodeShape in nodeShapes:
         if jobShape.memory <= nodeShape.memory and jobShape.cores <= nodeShape.cores and jobShape.disk <= nodeShape.disk:
             return nodeShape
-    import pdb
-    pdb.set_trace()
     assert False
 
 class AbstractProvisioner(object):

@@ -311,7 +311,6 @@ class hidden:
             self.assertTrue(locator.startswith('file:'))
             self.assertEqual(locator[len('file:'):], filePath)
 
-
 @needs_mesos
 class MesosBatchSystemTest(hidden.AbstractBatchSystemTest, MesosTestSupport):
     """
