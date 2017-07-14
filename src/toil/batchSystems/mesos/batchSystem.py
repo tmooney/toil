@@ -149,10 +149,15 @@ class MesosBatchSystem(BatchSystemSupport,
         self.lastTimeOfferLogged = 0
         self.logPeriod = 30  # seconds
 
+        self.ignoredNodes = set()
+
         self._startDriver()
 
     def setUserScript(self, userScript):
         self.userScript = userScript
+
+    def ignoreNode(self, nodeAddress):
+        self.ignoredNodes.add(nodeAddress)
 
     def issueBatchJob(self, jobNode):
         """
@@ -382,6 +387,11 @@ class MesosBatchSystem(BatchSystemSupport,
         unableToRun = True
         # Right now, gives priority to largest jobs
         for offer in offers:
+            if offer.hostname in self.ignoredNodes:
+                log.debug("Declining offer %s because node %s is designated for termination" %
+                        (offer.id.value, offer.hostname))
+                driver.declineOffer(offer.id)
+                continue
             runnableTasks = []
             # TODO: In an offer, can there ever be more than one resource with the same name?
             offerCores, offerMemory, offerDisk, offerPreemptable = self._parseOffer(offer)
