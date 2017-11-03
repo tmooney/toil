@@ -51,7 +51,7 @@ def runSetup():
                 'pynacl==1.1.2'],
             'google': [
                 'gcs_oauth2_boto_plugin==1.9',
-                'gsutils',
+                'gsutil',
                 botoRequirement],
             'cwl': [
                 'cwltool==1.0.20170822192924',
